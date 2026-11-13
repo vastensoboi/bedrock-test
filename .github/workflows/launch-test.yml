@@ -1,0 +1,46 @@
+name: Build launch test APK
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unpack project
+        run: |
+          test -f bedrock-launch-test-source.zip
+          mkdir project
+          unzip -q bedrock-launch-test-source.zip -d project
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: '12266719'
+          packages: 'platforms;android-35 build-tools;35.0.0'
+      - name: Test preparation
+        working-directory: project
+        run: |
+          mkdir -p /tmp/probe-tests
+          javac -d /tmp/probe-tests app/src/main/java/dev/custom/bedrockgui/GameArchiveCache.java tests/ArchiveTest.java
+          java -cp /tmp/probe-tests ArchiveTest
+      - name: Build APK
+        working-directory: project
+        run: gradle --no-daemon :app:assembleDebug
+      - name: Check runtime superclass is not replaced by a stub
+        run: |
+          apkanalyzer dex packages --defined-only project/app/build/outputs/apk/debug/app-debug.apk > /tmp/apk-classes.txt
+          python3 -c 'from pathlib import Path; names={line.split()[-1] for line in Path("/tmp/apk-classes.txt").read_text().splitlines() if line.split()}; assert "com.mojang.minecraftpe.MainActivity" not in names, "Compile-only game stub must not be packaged"'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BedrockLaunchTest-APK
+          path: project/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
