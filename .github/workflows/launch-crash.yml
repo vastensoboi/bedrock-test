@@ -1,0 +1,60 @@
+name: Build native crash diagnostics
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unpack project
+        run: |
+          test -f bedrock-launch-crash-source.zip
+          mkdir project
+          unzip -q bedrock-launch-crash-source.zip -d project
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: '12266719'
+          packages: 'platforms;android-35 build-tools;35.0.0'
+      - name: Test preparation
+        working-directory: project
+        run: |
+          mkdir -p /tmp/probe-tests
+          javac -d /tmp/probe-tests app/src/main/java/dev/custom/bedrockgui/GameArchiveCache.java tests/ArchiveTest.java
+          java -cp /tmp/probe-tests ArchiveTest
+      - name: Test resource names
+        working-directory: project
+        run: |
+          mkdir -p /tmp/resource-tests
+          javac -d /tmp/resource-tests app/src/main/java/dev/custom/bedrockgui/ResourceNames.java tests/ResourceNamesTest.java
+          java -cp /tmp/resource-tests ResourceNamesTest
+      - name: Test native trace reader
+        working-directory: project
+        run: |
+          mkdir -p /tmp/tombstone-tests
+          javac -d /tmp/tombstone-tests app/src/main/java/dev/custom/bedrockgui/TombstoneSummary.java tests/TombstoneTest.java
+          java -cp /tmp/tombstone-tests TombstoneTest
+      - name: Build APK
+        working-directory: project
+        run: gradle --no-daemon :app:assembleDebug
+      - name: Check runtime superclass is not replaced by a stub
+        run: |
+          apkanalyzer dex packages --defined-only project/app/build/outputs/apk/debug/app-debug.apk > /tmp/apk-classes.txt
+          python3 -c 'from pathlib import Path; names={line.split()[-1] for line in Path("/tmp/apk-classes.txt").read_text().splitlines() if line.split()}; assert "com.mojang.minecraftpe.MainActivity" not in names, "Compile-only game stub must not be packaged"'
+      - name: Name APK
+        run: cp project/app/build/outputs/apk/debug/app-debug.apk BedrockLaunchTest-crashlogs.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BedrockLaunchTest-CrashLogs
+          path: BedrockLaunchTest-crashlogs.apk
+          if-no-files-found: error
+          retention-days: 7
